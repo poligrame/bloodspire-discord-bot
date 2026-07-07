@@ -58,6 +58,20 @@ BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 Sans clé AWS, les tickets fonctionnent toujours : le bot invite simplement le
 joueur à cliquer sur **Parler à un humain**.
 
+### Salon de logs admin (optionnel)
+
+Définis `LOG_CHANNEL_ID` sur un salon visible du staff uniquement : le bot y
+journalise chaque **ouverture**, **escalade** et **fermeture** de ticket.
+
+### ⚠️ Railway : système de fichiers éphémère
+
+Sur Railway, les fichiers locaux (`claims.json`, `tickets.json`,
+`message-state.json`) sont **effacés à chaque redéploiement**. Le panneau et le
+message de réclamation sont malgré tout **idempotents** (le bot rescanne le salon
+au démarrage et ne reposte pas de doublon). En revanche, pour conserver les
+réclamations de titre et les tickets en cours entre deux redémarrages, monte un
+**Volume Railway** sur le dossier de l'app.
+
 ### ⚠️ Intent Discord requis
 
 Pour que Claude **lise les messages** dans les salons de ticket, active l'intent

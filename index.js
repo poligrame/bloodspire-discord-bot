@@ -52,10 +52,12 @@ function saveState(patch) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(merged, null, 2), "utf8");
 }
 
+const CLAIM_TITLE = "🎁 Titre gratuit — Fly au spawn";
+
 function buildClaimEmbed() {
   return new EmbedBuilder()
     .setColor(0xc0001a)
-    .setTitle("🎁 Titre gratuit — Fly au spawn")
+    .setTitle(CLAIM_TITLE)
     .setDescription(
       "Clique sur **Réclamer** et indique ton pseudo Minecraft pour recevoir " +
         "le titre `discord`, qui te donne accès au **fly au spawn**.\n\n" +
@@ -88,13 +90,25 @@ async function ensureClaimMessage() {
     return;
   }
 
-  const state = loadState();
-  if (state.messageId) {
-    try {
-      const existing = await channel.messages.fetch(state.messageId);
-      if (existing) return; // deja poste, on ne double pas
-    } catch {
-      // message supprime manuellement -> on en repostera un nouveau
+  // FS ephemere de Railway : message-state.json disparait a chaque redemarrage.
+  // On scanne donc le salon pour retrouver le message deja poste (et on supprime
+  // les doublons), sinon le bot en reposte un a chaque redemarrage.
+  const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  if (recent) {
+    const mine = [...recent.values()]
+      .filter(
+        (m) =>
+          m.author.id === client.user.id &&
+          m.embeds.length > 0 &&
+          m.embeds[0].title === CLAIM_TITLE
+      )
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const keep = mine.shift();
+    for (const dup of mine) await dup.delete().catch(() => {});
+    if (keep) {
+      await keep.edit({ embeds: [buildClaimEmbed()], components: [buildClaimRow()] }).catch(() => {});
+      saveState({ messageId: keep.id });
+      return;
     }
   }
 

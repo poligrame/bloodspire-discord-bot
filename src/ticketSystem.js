@@ -18,12 +18,27 @@ const { getTicket, setTicket, removeTicket, listByOwner } = require("./tickets")
 
 const PANEL_CHANNEL_ID = (process.env.PANEL_CHANNEL_ID || "").trim();
 const TICKET_CATEGORY_ID = (process.env.TICKET_CATEGORY_ID || "").trim();
+const LOG_CHANNEL_ID = (process.env.LOG_CHANNEL_ID || "").trim();
 const STAFF_IDS = (process.env.TICKET_STAFF_IDS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
 const BRAND = 0xc0001a;
+const PANEL_TITLE = "🎫 Ouvrir un ticket — BloodSpire";
+
+/** Journalise un evenement dans le salon de logs admin (si configure). */
+async function logEvent(client, { title, description, color }) {
+  if (!LOG_CHANNEL_ID) return;
+  const ch = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+  const embed = new EmbedBuilder()
+    .setColor(color ?? BRAND)
+    .setTitle(title)
+    .setDescription(description)
+    .setTimestamp();
+  await ch.send({ embeds: [embed] }).catch(() => {});
+}
 
 // Anti-doublon de traitement d'un meme salon (messages concurrents).
 const processing = new Set();
@@ -33,7 +48,7 @@ const processing = new Set();
 function buildPanelEmbed() {
   return new EmbedBuilder()
     .setColor(BRAND)
-    .setTitle("🎫 Ouvrir un ticket — BloodSpire")
+    .setTitle(PANEL_TITLE)
     .setDescription(
       "Besoin d'aide ? Choisis une catégorie ci-dessous. Un salon privé s'ouvre avec " +
         "**BloodBot**, notre assistant. Il répond aux questions simples et transmet à un " +
@@ -68,11 +83,32 @@ async function ensurePanel(client, loadState, saveState) {
     console.error("[Tickets] PANEL_CHANNEL_ID invalide ou pas un salon texte.");
     return;
   }
-  const state = loadState();
-  if (state.ticketPanelId) {
-    const existing = await channel.messages.fetch(state.ticketPanelId).catch(() => null);
-    if (existing) return;
+  // Railway a un systeme de fichiers ephemere : message-state.json est efface a
+  // chaque redemarrage. On ne se fie donc PAS qu'au fichier — on scanne le salon
+  // pour retrouver le panneau deja poste (et on supprime les doublons eventuels),
+  // sinon le bot reposterait un panneau a chaque redemarrage.
+  const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  let existing = null;
+  if (recent) {
+    const mine = [...recent.values()]
+      .filter(
+        (m) =>
+          m.author.id === client.user.id &&
+          m.embeds.length > 0 &&
+          m.embeds[0].title === PANEL_TITLE
+      )
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    existing = mine.shift() || null;
+    for (const dup of mine) await dup.delete().catch(() => {}); // menage des doublons
   }
+
+  if (existing) {
+    // Remet les boutons/embed a jour au cas ou le code a change.
+    await existing.edit({ embeds: [buildPanelEmbed()], components: [buildPanelRow()] }).catch(() => {});
+    saveState({ ticketPanelId: existing.id });
+    return;
+  }
+
   const message = await channel.send({
     embeds: [buildPanelEmbed()],
     components: [buildPanelRow()],
@@ -270,6 +306,11 @@ async function handleModalSubmit(interaction) {
   await channel.send({ content: greeting, components: [claudeButtons()] });
 
   await interaction.editReply(`✅ Ton ticket est ouvert : <#${channel.id}>`);
+  await logEvent(interaction.client, {
+    title: "🎫 Ticket ouvert",
+    description: `${cfg.emoji} **${cfg.label}** — <@${ownerId}> → <#${channel.id}>`,
+    color: cfg.color,
+  });
 }
 
 // ── Conversation avec Claude ────────────────────────────────────────────────
@@ -451,6 +492,12 @@ async function escalateToStaff(claudeChannel, ticket, client) {
   );
   removeTicket(claudeChannel.id);
   setTimeout(() => claudeChannel.delete().catch(() => {}), 8000);
+
+  await logEvent(client, {
+    title: "🙋 Ticket escaladé au staff",
+    description: `${cfg.emoji} **${cfg.label}** — <@${ticket.ownerId}> → <#${staffChannel.id}>`,
+    color: cfg.color,
+  });
 }
 
 function ownerNameFallback(ticket) {
@@ -480,6 +527,11 @@ async function handleResolvedButton(interaction) {
   });
   removeTicket(interaction.channel.id);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
+  await logEvent(interaction.client, {
+    title: "✅ Ticket fermé (résolu)",
+    description: `**${TICKET_TYPES[ticket.type]?.label || ticket.type}** — fermé par <@${ticket.ownerId}> (sans staff)`,
+    color: 0x2ecc71,
+  });
 }
 
 // ── Boutons du salon staff ──────────────────────────────────────────────────
@@ -512,6 +564,11 @@ async function handleStaffClose(interaction) {
   await interaction.reply({ content: "🔒 Ticket fermé par le staff. Fermeture du salon…" });
   removeTicket(interaction.channel.id);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 4000);
+  await logEvent(interaction.client, {
+    title: "🔒 Ticket staff fermé",
+    description: `**${TICKET_TYPES[ticket.type]?.label || ticket.type}** — ticket de <@${ticket.ownerId}>, fermé par <@${interaction.user.id}>`,
+    color: 0x95a5a6,
+  });
 }
 
 // ── Routage ─────────────────────────────────────────────────────────────────
