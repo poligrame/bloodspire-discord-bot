@@ -14,7 +14,7 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 
-const { sendCommand } = require("./src/rcon");
+const { sendCommand, testConnection } = require("./src/rcon");
 const { getClaim, setClaim, removeClaim } = require("./src/claims");
 const ticketSystem = require("./src/ticketSystem");
 
@@ -149,6 +149,21 @@ client.once(Events.ClientReady, async () => {
     await tickets.ensurePanel();
   } catch (err) {
     console.error("[BloodSpire] ensurePanel a echoue:", err);
+  }
+
+  // Auto-test RCON : verdict clair dans les logs des le demarrage.
+  try {
+    const r = await testConnection();
+    if (r.ok) {
+      console.log("[BloodSpire] RCON OK ✅ — le serveur repond. Extrait:", r.detail);
+    } else {
+      console.error(
+        `[BloodSpire] RCON KO ❌ [${r.verdict}] ${r.detail}\n` +
+          `           → ${r.hint || ""}`
+      );
+    }
+  } catch (err) {
+    console.error("[BloodSpire] Auto-test RCON a echoue:", err);
   }
 });
 
