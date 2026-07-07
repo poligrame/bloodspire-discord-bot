@@ -18,6 +18,16 @@ const { sendCommand } = require("./src/rcon");
 const { getClaim, setClaim, removeClaim } = require("./src/claims");
 const ticketSystem = require("./src/ticketSystem");
 
+// Garde-fous globaux : une seule promesse rejetee ne doit JAMAIS faire crasher
+// (et donc redemarrer en boucle sur Railway) tout le bot. On journalise et on
+// continue.
+process.on("unhandledRejection", (err) => {
+  console.error("[BloodSpire] Promesse rejetee non geree:", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[BloodSpire] Exception non capturee:", err);
+});
+
 const TITLE_ID = process.env.TITLE_ID || "discord";
 const STATE_FILE = path.join(__dirname, "message-state.json");
 
@@ -84,9 +94,13 @@ function buildClaimRow() {
 
 /** Poste le message de reclamation au demarrage, ou reutilise celui deja poste. */
 async function ensureClaimMessage() {
-  const channel = await client.channels.fetch(process.env.CHANNEL_ID);
+  if (!process.env.CHANNEL_ID) {
+    console.warn("[BloodSpire] CHANNEL_ID non defini — message de reclamation non poste.");
+    return;
+  }
+  const channel = await client.channels.fetch(process.env.CHANNEL_ID).catch(() => null);
   if (!channel || !channel.isTextBased()) {
-    console.error("[BloodSpire] CHANNEL_ID invalide ou pas un salon texte.");
+    console.error("[BloodSpire] CHANNEL_ID invalide, inaccessible, ou pas un salon texte.");
     return;
   }
 
@@ -124,8 +138,18 @@ tickets = ticketSystem.register(client, loadState, saveState);
 
 client.once(Events.ClientReady, async () => {
   console.log(`[BloodSpire] Connecte en tant que ${client.user.tag}`);
-  await ensureClaimMessage();
-  await tickets.ensurePanel();
+  // Chaque etape est isolee : si l'une echoue (salon invalide, permission
+  // manquante...), on log et on continue au lieu de crasher le demarrage.
+  try {
+    await ensureClaimMessage();
+  } catch (err) {
+    console.error("[BloodSpire] ensureClaimMessage a echoue:", err);
+  }
+  try {
+    await tickets.ensurePanel();
+  } catch (err) {
+    console.error("[BloodSpire] ensurePanel a echoue:", err);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
