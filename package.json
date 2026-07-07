@@ -1,0 +1,18 @@
+{
+  "name": "bloodspire-discord-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord BloodSpire - donne le titre 'discord' (fly au spawn) via un bouton, par RCON.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "rcon-client": "^4.2.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
