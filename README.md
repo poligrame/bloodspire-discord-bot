@@ -8,8 +8,66 @@ Poste un message avec 2 boutons dans un salon Discord :
 - **❌ Annuler** : exécute `titre unassign <pseudo>` et libère le membre pour
   qu'il puisse réclamer à nouveau (utile s'il s'est trompé de pseudo).
 
-Le bot ne fait que ça pour l'instant — la structure (dossier `src/`) est
-prévue pour ajouter d'autres fonctionnalités plus tard sans tout réécrire.
+Le bot gère aussi un **système de tickets complet** (voir plus bas).
+
+## Système de tickets (Candidature / Bug / Joueur)
+
+Dans le salon `PANEL_CHANNEL_ID`, le bot poste un panneau avec 3 boutons :
+
+- **📋 Candidature** — postuler au staff
+- **🐛 Signaler un bug**
+- **🚨 Signaler un joueur**
+
+Chaque bouton ouvre un **formulaire** (5 questions adaptées au type) puis crée un
+**salon privé** visible uniquement par le joueur et le bot. Un rapport formaté y
+est posté et **BloodBot** (Claude Sonnet 4.5 via AWS Bedrock) accueille le joueur.
+
+### Comment ça marche
+
+1. **Salon IA (`stage: claude`)** — visible par le joueur + le bot uniquement.
+   Claude répond aux questions **simples liées au serveur**. Il connaît son rôle
+   (assistant BloodSpire) et **refuse tout sujet hors-serveur**.
+2. **Escalade vers un humain** — si le joueur clique sur **🙋 Parler à un humain**,
+   ou si Claude juge qu'un humain est nécessaire (sanction, validation de
+   candidature, bug grave…) : Claude **annonce qu'il fait une demande de ticket**,
+   crée un **salon staff**, y recopie le rapport + l'échange, puis **ferme son
+   propre salon**.
+3. **Salon staff (`stage: staff`)** — visible par le joueur + les rôles/membres de
+   `TICKET_STAFF_IDS`. Le joueur peut **demander la fermeture**, mais **seul le
+   staff peut fermer** réellement le ticket.
+4. **Résolution sans humain** — le joueur peut cliquer sur **✅ Fermer (résolu)**
+   dans le salon IA : Claude dit au revoir et ferme le salon, sans staff.
+
+### Configuration IA (obligatoire pour que Claude réponde)
+
+Renseigne dans `.env` **une seule** des deux options :
+
+```env
+# Option 1 (la plus simple) : une clé API Bedrock (jeton Bearer)
+AWS_BEARER_TOKEN_BEDROCK=ta-cle-api-bedrock
+
+# Option 2 : clés IAM classiques (laisse le Bearer vide)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+
+# Commun :
+BEDROCK_REGION=us-east-1
+BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+```
+
+Sans clé AWS, les tickets fonctionnent toujours : le bot invite simplement le
+joueur à cliquer sur **Parler à un humain**.
+
+### ⚠️ Intent Discord requis
+
+Pour que Claude **lise les messages** dans les salons de ticket, active l'intent
+privilégié **MESSAGE CONTENT INTENT** :
+Discord Developer Portal → ton appli → **Bot** → active *Message Content Intent*.
+Le bot a aussi besoin de la permission **Gérer les salons** (créer/supprimer les
+tickets) et **Gérer les rôles**/permissions sur la catégorie des tickets.
+
+La structure (dossier `src/`) reste prévue pour ajouter d'autres fonctionnalités
+plus tard sans tout réécrire.
 
 ## Comment ça parle au serveur Minecraft
 

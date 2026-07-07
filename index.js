@@ -16,6 +16,7 @@ const {
 
 const { sendCommand } = require("./src/rcon");
 const { getClaim, setClaim, removeClaim } = require("./src/claims");
+const ticketSystem = require("./src/ticketSystem");
 
 const TITLE_ID = process.env.TITLE_ID || "discord";
 const STATE_FILE = path.join(__dirname, "message-state.json");
@@ -23,7 +24,18 @@ const STATE_FILE = path.join(__dirname, "message-state.json");
 // Pseudo Minecraft valide : 3 a 16 caracteres, lettres/chiffres/underscore.
 const PSEUDO_REGEX = /^[a-zA-Z0-9_]{3,16}$/;
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+// GuildMessages + MessageContent : necessaires pour que Claude lise les
+// messages dans les salons de ticket. MessageContent est un intent PRIVILEGIE
+// a activer dans le portail developpeur Discord (onglet Bot).
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+let tickets;
 
 function loadState() {
   if (!fs.existsSync(STATE_FILE)) return {};
@@ -34,8 +46,10 @@ function loadState() {
   }
 }
 
-function saveState(state) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+/** Fusionne les cles dans message-state.json sans ecraser les autres. */
+function saveState(patch) {
+  const merged = { ...loadState(), ...patch };
+  fs.writeFileSync(STATE_FILE, JSON.stringify(merged, null, 2), "utf8");
 }
 
 function buildClaimEmbed() {
@@ -91,13 +105,20 @@ async function ensureClaimMessage() {
   saveState({ messageId: message.id });
 }
 
+// Branche le systeme de tickets (messages + panneau).
+tickets = ticketSystem.register(client, loadState, saveState);
+
 client.once(Events.ClientReady, async () => {
   console.log(`[BloodSpire] Connecte en tant que ${client.user.tag}`);
   await ensureClaimMessage();
+  await tickets.ensurePanel();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    // Le systeme de tickets traite ses propres interactions en premier.
+    if (await tickets.handleInteraction(interaction)) return;
+
     if (interaction.isButton()) {
       if (interaction.customId === "claim_title") return handleClaimButton(interaction);
       if (interaction.customId === "cancel_title") return handleCancelButton(interaction);
@@ -107,8 +128,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (err) {
     console.error("[BloodSpire] Erreur interaction:", err);
     const payload = { content: "❌ Une erreur interne est survenue. Réessaie plus tard.", ephemeral: true };
-    if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
-    else await interaction.reply(payload);
+    try {
+      if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
+      else if (interaction.isRepliable()) await interaction.reply(payload);
+    } catch {
+      /* interaction expiree/deja fermee */
+    }
   }
 });
 
