@@ -61,11 +61,15 @@ async function fetchBanInfo(code) {
   try {
     raw = await sendCommand(`baninfo ${code}`);
   } catch (e) {
-    console.error("[Tickets] RCON baninfo echoue:", e.message);
+    // Ex : ECONNREFUSED (port RCON ferme), ETIMEDOUT (pare-feu), ENOTFOUND
+    // (mauvais RCON_HOST), "Authentication failed" (mauvais RCON_PASSWORD).
+    console.error("[Tickets] RCON baninfo INJOIGNABLE:", e.code || "", e.message);
     return { available: false, found: false };
   }
   if (!raw || !raw.includes("[BANINFO]")) {
-    // Plugin sans la commande (ancienne version) ou reponse inattendue.
+    // RCON a repondu mais SANS [BANINFO] : commande /baninfo absente du serveur
+    // en cours (ancien .jar a re-uploader) ou reponse inattendue.
+    console.error("[Tickets] baninfo : reponse sans [BANINFO] (commande absente ?). Recu:", JSON.stringify(raw));
     return { available: false, found: false };
   }
   const line = raw.slice(raw.indexOf("[BANINFO]") + 9).trim();
