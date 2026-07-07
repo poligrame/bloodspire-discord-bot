@@ -83,23 +83,23 @@ joueur à cliquer sur **Parler à un humain**.
 Définis `LOG_CHANNEL_ID` sur un salon visible du staff uniquement : le bot y
 journalise chaque **ouverture**, **escalade** et **fermeture** de ticket.
 
-### ⚠️ Railway : mémoire persistante (Volume) — OBLIGATOIRE
+### Mémoire persistante : sur le SERVEUR MINECRAFT (via RCON)
 
-Sur Railway, le système de fichiers est **effacé à chaque redéploiement**. Sans
-persistance, à chaque reload le bot **oublie** les réclamations de titre et
-l'état des tickets (les salons de ticket ouverts deviennent "morts", et un
-membre peut re-réclamer un titre).
+Sur Railway le système de fichiers est effacé à chaque redéploiement. Pour que
+le bot n'oublie rien, ses données (`claims.json`, `tickets.json`,
+`message-state.json`) sont stockées **sur ton serveur Minecraft**, dans le
+dossier `plugins/<plugin>/discorddata/`, via la commande RCON `/discorddata`.
 
-Le bot écrit toutes ses données (`claims.json`, `tickets.json`,
-`message-state.json`) dans le dossier défini par la variable **`DATA_DIR`**.
-Pour rendre la mémoire persistante :
+- **Au démarrage**, le bot charge tout depuis le serveur (cache mémoire).
+- **À chaque changement** (titre réclamé, ticket ouvert/fermé), il pousse la
+  mise à jour vers le serveur (écriture découpée en morceaux pour contourner la
+  limite de taille d'une commande RCON, écriture atomique côté plugin).
+- **Sécurité anti-perte** : si le serveur est injoignable au démarrage, le bot
+  ne pousse rien (il n'écrase pas les données du serveur avec un cache vide).
 
-1. Railway → ton service → onglet **Variables** → ajoute `DATA_DIR` = `/data`.
-2. Railway → ton service → onglet **Settings** (ou **Volumes**) → **+ New Volume**
-   → **Mount path** = `/data`. Valide.
-3. Railway redéploie ; les fichiers survivent désormais aux redémarrages.
-
-En local (sans `DATA_DIR`), les fichiers vont dans `./data` automatiquement.
+**Rien à configurer** : ça réutilise le même RCON que le reste. Il faut juste
+que le plugin (avec la commande `/discorddata`) soit **installé et à jour** sur
+le serveur. Aucun Volume Railway nécessaire.
 
 Le panneau de tickets et le message de réclamation restent en plus **idempotents**
 (le bot rescanne le salon au démarrage et ne poste jamais de doublon).

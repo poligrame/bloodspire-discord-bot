@@ -14,7 +14,10 @@ const {
 
 const { sendCommand, testConnection } = require("./src/rcon");
 const { getClaim, setClaim, removeClaim } = require("./src/claims");
-const { readJson, writeJson } = require("./src/storage");
+const { init: initStorage, readJson, writeJson } = require("./src/storage");
+
+// Fichiers persistes sur le serveur Minecraft (via /discorddata, RCON).
+const DATA_FILES = ["claims.json", "tickets.json", "message-state.json"];
 const ticketSystem = require("./src/ticketSystem");
 
 // Garde-fous globaux : une seule promesse rejetee ne doit JAMAIS faire crasher
@@ -131,18 +134,6 @@ tickets = ticketSystem.register(client, loadState, saveState);
 
 client.once(Events.ClientReady, async () => {
   console.log(`[BloodSpire] Connecte en tant que ${client.user.tag}`);
-  // Chaque etape est isolee : si l'une echoue (salon invalide, permission
-  // manquante...), on log et on continue au lieu de crasher le demarrage.
-  try {
-    await ensureClaimMessage();
-  } catch (err) {
-    console.error("[BloodSpire] ensureClaimMessage a echoue:", err);
-  }
-  try {
-    await tickets.ensurePanel();
-  } catch (err) {
-    console.error("[BloodSpire] ensurePanel a echoue:", err);
-  }
 
   // Auto-test RCON : verdict clair dans les logs des le demarrage.
   try {
@@ -157,6 +148,27 @@ client.once(Events.ClientReady, async () => {
     }
   } catch (err) {
     console.error("[BloodSpire] Auto-test RCON a echoue:", err);
+  }
+
+  // Charge la memoire persistante DEPUIS LE SERVEUR MINECRAFT avant de traiter
+  // quoi que ce soit (claims + tickets survivent aux redemarrages du bot).
+  try {
+    await initStorage(DATA_FILES);
+  } catch (err) {
+    console.error("[BloodSpire] Chargement de la memoire (serveur) a echoue:", err);
+  }
+
+  // Chaque etape est isolee : si l'une echoue (salon invalide, permission
+  // manquante...), on log et on continue au lieu de crasher le demarrage.
+  try {
+    await ensureClaimMessage();
+  } catch (err) {
+    console.error("[BloodSpire] ensureClaimMessage a echoue:", err);
+  }
+  try {
+    await tickets.ensurePanel();
+  } catch (err) {
+    console.error("[BloodSpire] ensurePanel a echoue:", err);
   }
 });
 
