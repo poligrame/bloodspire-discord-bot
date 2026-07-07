@@ -12,11 +12,12 @@ Le bot gère aussi un **système de tickets complet** (voir plus bas).
 
 ## Système de tickets (Candidature / Bug / Joueur)
 
-Dans le salon `PANEL_CHANNEL_ID`, le bot poste un panneau avec 3 boutons :
+Dans le salon `PANEL_CHANNEL_ID`, le bot poste un panneau avec 4 boutons :
 
 - **📋 Candidature** — postuler au staff
 - **🐛 Signaler un bug**
 - **🚨 Signaler un joueur**
+- **⛔ Contester un ban** — demande l'ID du ban (#…) + preuves solides
 
 Chaque bouton ouvre un **formulaire** (5 questions adaptées au type) puis crée un
 **salon privé** visible uniquement par le joueur et le bot. Un rapport formaté y
@@ -27,16 +28,35 @@ est posté et **BloodBot** (Claude Sonnet 4.5 via AWS Bedrock) accueille le joue
 1. **Salon IA (`stage: claude`)** — visible par le joueur + le bot uniquement.
    Claude répond aux questions **simples liées au serveur**. Il connaît son rôle
    (assistant BloodSpire) et **refuse tout sujet hors-serveur**.
-2. **Escalade vers un humain** — si le joueur clique sur **🙋 Parler à un humain**,
-   ou si Claude juge qu'un humain est nécessaire (sanction, validation de
-   candidature, bug grave…) : Claude **annonce qu'il fait une demande de ticket**,
-   crée un **salon staff**, y recopie le rapport + l'échange, puis **ferme son
-   propre salon**.
-3. **Salon staff (`stage: staff`)** — visible par le joueur + les rôles/membres de
-   `TICKET_STAFF_IDS`. Le joueur peut **demander la fermeture**, mais **seul le
-   staff peut fermer** réellement le ticket.
-4. **Résolution sans humain** — le joueur peut cliquer sur **✅ Fermer (résolu)**
+2. **Demande d'ouverture d'un ticket humain (confirmation admin)** — si le joueur
+   clique sur **🙋 Parler à un humain**, ou si Claude juge qu'un humain est
+   nécessaire : le bot poste une **demande** dans le salon `REQUEST_CHANNEL_ID`
+   (« demande-de-tickets ») avec deux boutons **✅ Accepter / ❌ Refuser**
+   (réservés au staff). **Le salon IA reste ouvert** : Claude continue à discuter
+   avec le joueur tant que la demande n'est pas acceptée.
+3. **Accepté** → le bot crée le **salon staff** (visible par le joueur + les
+   rôles `TICKET_STAFF_IDS`), y recopie le rapport + l'échange, et **ferme le
+   salon IA**. **Refusé** → le salon IA continue normalement.
+4. **Salon staff (`stage: staff`)** — le joueur peut **demander la fermeture**,
+   mais **seul le staff peut fermer** réellement.
+5. **Résolution sans humain** — le joueur peut cliquer sur **✅ Fermer (résolu)**
    dans le salon IA : Claude dit au revoir et ferme le salon, sans staff.
+
+### ⛔ Contestation de ban
+
+Le type **Contester un ban** demande l'**ID du ban** (le code `#…` affiché en jeu
+dans le monde des bans) + des preuves. Le bot interroge le serveur par RCON
+(`baninfo <id>`) :
+
+- **Ban de triche** (fly, xray, killaura…) → **refusé d'entrée**, le ticket ne
+  s'ouvre même pas.
+- **ID introuvable** → le ticket ne s'ouvre pas non plus.
+- **Ban contestable** → le ticket s'ouvre, Claude connaît le **motif officiel**
+  du ban, confronte la version du joueur, exige des preuves solides, et n'escalade
+  vers un humain que si l'innocence devient crédible.
+
+> Nécessite la commande `/baninfo` côté plugin (voir le dépôt du plugin). Sans
+> elle, le bot ne peut pas vérifier le motif et laissera Claude gérer + escalader.
 
 ### Configuration IA (obligatoire pour que Claude réponde)
 

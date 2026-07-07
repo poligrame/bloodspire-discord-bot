@@ -64,10 +64,50 @@ const TICKET_TYPES = {
       "preuves), demander poliment ce qui manque, puis escalader vers le staff. " +
       "N'annonce JAMAIS de sanction toi-même.",
   },
+  ban: {
+    label: "Contester un ban",
+    emoji: "⛔",
+    color: 0x9b59b6,
+    style: "Secondary",
+    prefix: "unban",
+    modalTitle: "Contestation de ban",
+    questions: [
+      { id: "pseudo", label: "Ton pseudo Minecraft", style: "Short", max: 16 },
+      { id: "banId", label: "ID du ban (#... affiché en jeu)", style: "Short", max: 40 },
+      { id: "explication", label: "Ta version des faits", style: "Paragraph", max: 900 },
+      { id: "preuves", label: "Preuves SOLIDES (lien vidéo / logs)", style: "Paragraph", max: 700 },
+    ],
+    role:
+      "Ce ticket est une CONTESTATION DE BAN. Le motif exact du ban t'est fourni " +
+      "ci-dessous (via l'ID). Un ban pour TRICHE n'est jamais contestable ici. Ton " +
+      "rôle : confronter la version du joueur au motif, EXIGER des preuves solides " +
+      "(vidéo claire, logs) — une simple affirmation ne suffit pas. Si, et seulement " +
+      "si, les preuves rendent l'innocence crédible, escalade vers un humain pour " +
+      "décision. Sinon, explique calmement pourquoi le ban tient et n'escalade pas.",
+  },
 };
 
-/** Construit le prompt systeme de Claude pour un type de ticket donne. */
-function buildSystemPrompt(type) {
+/** Mots-clefs identifiant un ban de triche (non contestable). */
+const CHEAT_KEYWORDS = [
+  "cheat", "hack", "triche", "fly", "vol", "xray", "x-ray", "x ray", "killaura",
+  "kill aura", "aura", "aimbot", "aim", "reach", "scaffold", "autoclick", "auto click",
+  "autoclicker", "forcefield", "force field", "esp", "nofall", "no fall", "speed",
+  "fastplace", "jesus", "criticals", "velocity", "bhop", "step", "glide", "wallhack",
+];
+
+/** Un motif de ban correspond-il a de la triche (non contestable) ? */
+function isCheatBan(reason) {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return CHEAT_KEYWORDS.some((k) => r.includes(k));
+}
+
+/**
+ * Construit le prompt systeme de Claude pour un type de ticket donne.
+ * @param {string} type
+ * @param {string} [extraContext] contexte additionnel injecte (ex : motif du ban)
+ */
+function buildSystemPrompt(type, extraContext) {
   const cfg = TICKET_TYPES[type];
   const roleLine = cfg ? cfg.role : "Ce ticket est une demande de support générale.";
   return (
@@ -76,8 +116,12 @@ function buildSystemPrompt(type) {
     "TON RÔLE :\n" +
     "- Aider UNIQUEMENT sur des sujets liés au serveur BloodSpire : bugs en jeu, commandes " +
     "et fonctionnalités du serveur, shop/économie, teams, titres, événements, signalements, " +
-    "candidatures staff.\n" +
+    "candidatures staff, contestations de ban.\n" +
     "- Tu es courtois, concis, tu tutoies le joueur et tu réponds dans SA langue.\n\n" +
+    "MÉMOIRE :\n" +
+    "- Tu as accès à TOUT l'historique de la conversation ci-dessus. Ne repose JAMAIS une " +
+    "question dont la réponse figure déjà dans les infos du ticket ou dans un message précédent " +
+    "du joueur : réutilise directement ce qui a déjà été dit.\n\n" +
     "RÈGLES STRICTES :\n" +
     "- Tu ne réponds JAMAIS à autre chose que le problème du joueur sur le serveur. Si on te " +
     "demande un sujet hors-serveur (aide aux devoirs, code, culture générale, autre jeu, etc.), " +
@@ -85,10 +129,11 @@ function buildSystemPrompt(type) {
     "- Tu ne promets jamais de remboursement, de déban, de sanction ou de récompense : ce sont " +
     "des décisions humaines.\n" +
     "- Tu escalades vers un humain (needs_human=true) quand : le joueur demande un humain, une " +
-    "action du staff est nécessaire (sanction, validation, remboursement, décision), un bug grave " +
-    "ou exploitable, ou quand tu ne peux pas résoudre toi-même.\n\n" +
+    "action du staff est nécessaire (sanction, validation, remboursement, déban, décision), un bug " +
+    "grave ou exploitable, ou quand tu ne peux pas résoudre toi-même.\n\n" +
     "CONTEXTE DE CE TICKET :\n" +
     roleLine +
+    (extraContext ? "\n\n" + extraContext : "") +
     "\n\n" +
     "FORMAT DE RÉPONSE OBLIGATOIRE :\n" +
     "Réponds UNIQUEMENT par un objet JSON compact, sans aucun texte autour, exactement de la forme :\n" +
@@ -98,4 +143,4 @@ function buildSystemPrompt(type) {
   );
 }
 
-module.exports = { TICKET_TYPES, buildSystemPrompt };
+module.exports = { TICKET_TYPES, buildSystemPrompt, isCheatBan };

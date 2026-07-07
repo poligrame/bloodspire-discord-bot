@@ -12,13 +12,17 @@ const {
   OverwriteType,
 } = require("discord.js");
 
-const { TICKET_TYPES, buildSystemPrompt } = require("./ticketConfig");
+const { TICKET_TYPES, buildSystemPrompt, isCheatBan } = require("./ticketConfig");
 const { askClaude, usable: bedrockUsable } = require("./bedrock");
 const { getTicket, setTicket, removeTicket, listByOwner } = require("./tickets");
+const { sendCommand } = require("./rcon");
 
 const PANEL_CHANNEL_ID = (process.env.PANEL_CHANNEL_ID || "").trim();
 const TICKET_CATEGORY_ID = (process.env.TICKET_CATEGORY_ID || "").trim();
 const LOG_CHANNEL_ID = (process.env.LOG_CHANNEL_ID || "").trim();
+// Salon "demande-de-tickets" : le bot y poste les demandes d'ouverture de ticket
+// humain, qu'un admin doit accepter/refuser. Defaut = le salon du panneau.
+const REQUEST_CHANNEL_ID = (process.env.REQUEST_CHANNEL_ID || PANEL_CHANNEL_ID || "").trim();
 const STAFF_IDS = (process.env.TICKET_STAFF_IDS || "")
   .split(",")
   .map((s) => s.trim())
@@ -40,6 +44,57 @@ async function logEvent(client, { title, description, color }) {
   await ch.send({ embeds: [embed] }).catch(() => {});
 }
 
+/** Normalise un ID de ban tape par le joueur : enleve #, espaces, minuscule. */
+function normalizeBanId(raw) {
+  return (raw || "").trim().replace(/^#/, "").replace(/\s+/g, "").toLowerCase();
+}
+
+/**
+ * Interroge le serveur via RCON `baninfo <code>` et parse la reponse.
+ * Format attendu (une ligne) :
+ *   [BANINFO] found=true code=... player=... type=... active=true contestable=false category=cheat reason=...
+ * @returns {Promise<{available:boolean, found:boolean, player?:string, active?:boolean,
+ *   category?:string, contestable?:boolean, reason?:string}>}
+ */
+async function fetchBanInfo(code) {
+  let raw;
+  try {
+    raw = await sendCommand(`baninfo ${code}`);
+  } catch (e) {
+    console.error("[Tickets] RCON baninfo echoue:", e.message);
+    return { available: false, found: false };
+  }
+  if (!raw || !raw.includes("[BANINFO]")) {
+    // Plugin sans la commande (ancienne version) ou reponse inattendue.
+    return { available: false, found: false };
+  }
+  const line = raw.slice(raw.indexOf("[BANINFO]") + 9).trim();
+  const out = { available: true, found: false };
+  const reasonIdx = line.indexOf("reason=");
+  const head = reasonIdx >= 0 ? line.slice(0, reasonIdx) : line;
+  if (reasonIdx >= 0) out.reason = line.slice(reasonIdx + 7).trim();
+  for (const tok of head.trim().split(/\s+/)) {
+    const eq = tok.indexOf("=");
+    if (eq < 0) continue;
+    const k = tok.slice(0, eq);
+    const v = tok.slice(eq + 1);
+    if (k === "found") out.found = v === "true";
+    else if (k === "player") out.player = v;
+    else if (k === "active") out.active = v === "true";
+    else if (k === "category") out.category = v;
+    else if (k === "contestable") out.contestable = v === "true";
+  }
+  return out;
+}
+
+/** Décide si un ban est contestable, en combinant serveur + mots-clefs locaux. */
+function banContestable(info) {
+  if (info.category === "cheat") return false;
+  if (info.contestable === false) return false;
+  if (isCheatBan(info.reason)) return false;
+  return true;
+}
+
 // Anti-doublon de traitement d'un meme salon (messages concurrents).
 const processing = new Set();
 
@@ -55,7 +110,8 @@ function buildPanelEmbed() {
         "membre du staff si c'est nécessaire.\n\n" +
         "📋 **Candidature** — postuler au staff\n" +
         "🐛 **Signaler un bug** — un souci technique en jeu\n" +
-        "🚨 **Signaler un joueur** — comportement / triche"
+        "🚨 **Signaler un joueur** — comportement / triche\n" +
+        "⛔ **Contester un ban** — avec l'ID du ban + preuves solides"
     )
     .setFooter({ text: "BloodSpire • un seul ticket ouvert par catégorie" });
 }
@@ -235,6 +291,38 @@ async function handleModalSubmit(interaction) {
   }
   const report = buildReport(type, answers);
 
+  // ── Contestation de ban : on vérifie le ban AVANT d'ouvrir quoi que ce soit.
+  //    Un ban de triche n'ouvre même pas de ticket.
+  let extraContext = null;
+  if (type === "ban") {
+    const code = normalizeBanId(answers.banId);
+    if (!code) {
+      await interaction.editReply("❌ Indique l'ID du ban (le code #… affiché en jeu dans le monde des bans).");
+      return;
+    }
+    const info = await fetchBanInfo(code);
+    if (info.available && !info.found) {
+      await interaction.editReply(
+        `❌ Aucun ban trouvé pour l'ID \`#${code}\`. Vérifie le code exact affiché en jeu.`
+      );
+      return;
+    }
+    if (info.available && info.found && !banContestable(info)) {
+      await interaction.editReply(
+        "⛔ Désolé, ce ban est un **ban pour triche** — il n'est pas contestable. " +
+          "Le ticket ne sera pas ouvert."
+      );
+      return;
+    }
+    // Contestable (ou impossible à vérifier) : on ouvre et on donne le motif à Claude.
+    extraContext = info.found
+      ? `INFOS DU BAN (ID #${code}) — joueur: ${info.player || "?"}, actif: ${info.active}, ` +
+        `motif officiel: « ${info.reason || "non renseigné"} ». Ce ban est contestable : ` +
+        "confronte la version du joueur à ce motif et exige des preuves solides."
+      : `INFOS DU BAN : impossible de vérifier l'ID #${code} auprès du serveur pour le moment. ` +
+        "Demande au joueur de confirmer l'ID exact et reste prudent ; en cas de doute, escalade.";
+  }
+
   const guild = interaction.guild;
   const ownerId = interaction.user.id;
   const overwrites = [
@@ -283,6 +371,7 @@ async function handleModalSubmit(interaction) {
     ownerName: interaction.user.username,
     stage: "claude",
     report,
+    extraContext,
     createdAt: Date.now(),
   });
 
@@ -306,11 +395,6 @@ async function handleModalSubmit(interaction) {
   await channel.send({ content: greeting, components: [claudeButtons()] });
 
   await interaction.editReply(`✅ Ton ticket est ouvert : <#${channel.id}>`);
-  await logEvent(interaction.client, {
-    title: "🎫 Ticket ouvert",
-    description: `${cfg.emoji} **${cfg.label}** — <@${ownerId}> → <#${channel.id}>`,
-    color: cfg.color,
-  });
 }
 
 // ── Conversation avec Claude ────────────────────────────────────────────────
@@ -376,13 +460,15 @@ async function handleTicketMessage(message) {
     await message.channel.sendTyping();
     const botId = message.client.user.id;
     const conversation = await buildConversation(message.channel, ticket, botId);
-    const raw = await askClaude(buildSystemPrompt(ticket.type), conversation);
+    const raw = await askClaude(buildSystemPrompt(ticket.type, ticket.extraContext), conversation);
     const { needsHuman, reply } = parseClaude(raw);
 
     if (reply) await message.channel.send(reply.slice(0, 1900));
 
     if (needsHuman) {
-      await escalateToStaff(message.channel, ticket, message.client);
+      // On n'ouvre PAS directement : on demande une confirmation admin. Le salon
+      // IA reste ouvert tant que la demande n'est pas acceptée.
+      await requestHumanTicket(message.channel, getTicket(message.channel.id) || ticket, message.client);
     }
   } catch (err) {
     console.error("[Tickets] Erreur Claude:", err);
@@ -394,23 +480,98 @@ async function handleTicketMessage(message) {
   }
 }
 
-// ── Escalade : fermeture du ticket Claude -> ouverture d'un ticket staff ─────
+// ── Demande d'ouverture d'un ticket humain (confirmation admin requise) ──────
 
-async function escalateToStaff(claudeChannel, ticket, client) {
+/** Courte transcription du salon IA, pour donner le contexte au staff/admin. */
+async function shortTranscript(channel, botId) {
+  const fetched = await channel.messages.fetch({ limit: 30 }).catch(() => null);
+  if (!fetched) return "";
+  return [...fetched.values()]
+    .reverse()
+    .filter((m) => m.content && m.content.trim())
+    .map((m) => `${m.author.id === botId ? "BloodBot" : m.author.username}: ${m.content}`)
+    .join("\n")
+    .slice(-3000);
+}
+
+/**
+ * Poste une DEMANDE d'ouverture de ticket humain dans le salon demande-de-tickets.
+ * Le salon IA reste ouvert ; un admin doit Accepter (ouvre le ticket humain et
+ * ferme le salon IA) ou Refuser (le salon IA continue).
+ */
+async function requestHumanTicket(claudeChannel, ticket, client, note) {
+  if (ticket.requestPending) {
+    await claudeChannel.send(
+      "🙋 Une demande est déjà en attente de validation par un admin. On continue en attendant leur réponse."
+    );
+    return;
+  }
+  const cfg = TICKET_TYPES[ticket.type];
+  const reqChannel = REQUEST_CHANNEL_ID
+    ? await client.channels.fetch(REQUEST_CHANNEL_ID).catch(() => null)
+    : null;
+  if (!reqChannel || !reqChannel.isTextBased()) {
+    // Aucun salon de demande configuré -> on ouvre directement (repli).
+    await openStaffTicket(claudeChannel, ticket, client);
+    return;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(cfg.color)
+    .setTitle(`📥 Demande d'ouverture — ${cfg.emoji} ${cfg.label}`)
+    .setDescription((note ? `**Motif :** ${note}\n\n` : "") + ticket.report.slice(0, 3500))
+    .addFields(
+      { name: "Joueur", value: `<@${ticket.ownerId}>`, inline: true },
+      { name: "Salon IA", value: `<#${claudeChannel.id}>`, inline: true }
+    )
+    .setFooter({ text: "Un admin doit Accepter pour ouvrir le ticket humain." });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`req_accept:${claudeChannel.id}`)
+      .setLabel("Accepter")
+      .setEmoji("✅")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`req_refuse:${claudeChannel.id}`)
+      .setLabel("Refuser")
+      .setEmoji("❌")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  const pings = STAFF_IDS.map((id) => `<@&${id}>`).join(" ");
+  const msg = await reqChannel.send({ content: pings, embeds: [embed], components: [row] });
+
+  ticket.requestPending = true;
+  ticket.requestMsgId = msg.id;
+  ticket.requestChannelId = reqChannel.id;
+  setTicket(claudeChannel.id, ticket);
+
+  await claudeChannel.send(
+    "🙋 J'ai fait une demande d'ouverture de ticket auprès des admins. " +
+      "En attendant leur réponse, tu peux continuer à discuter avec moi ici."
+  );
+}
+
+/** Désactive les boutons d'une demande et reflète le statut dans l'embed. */
+async function closeRequestMessage(message, statusText) {
+  try {
+    const embed = message.embeds[0]
+      ? EmbedBuilder.from(message.embeds[0]).setFooter({ text: statusText })
+      : null;
+    await message.edit({ embeds: embed ? [embed] : message.embeds, components: [] });
+  } catch {
+    /* message supprimé */
+  }
+}
+
+// ── Ouverture effective du ticket humain (après acceptation admin) ───────────
+
+async function openStaffTicket(claudeChannel, ticket, client) {
   const guild = claudeChannel.guild;
   const cfg = TICKET_TYPES[ticket.type];
 
-  // Transcription courte pour donner le contexte au staff.
-  let transcript = "";
-  const fetched = await claudeChannel.messages.fetch({ limit: 30 }).catch(() => null);
-  if (fetched) {
-    transcript = [...fetched.values()]
-      .reverse()
-      .filter((m) => m.content && m.content.trim())
-      .map((m) => `${m.author.id === client.user.id ? "BloodBot" : m.author.username}: ${m.content}`)
-      .join("\n")
-      .slice(-3000);
-  }
+  const transcript = await shortTranscript(claudeChannel, client.user.id);
 
   const overwrites = [
     { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -485,16 +646,17 @@ async function escalateToStaff(claudeChannel, ticket, client) {
     });
   }
 
-  // Claude previent puis ferme son propre salon.
+  // Demande acceptée : Claude prévient puis ferme son propre salon.
   await claudeChannel.send(
-    `🙋 J'ai fait une demande pour un ticket avec le staff. Ils prennent le relais ici 👉 <#${staffChannel.id}>.\n` +
+    `✅ Ta demande a été acceptée ! Le staff prend le relais ici 👉 <#${staffChannel.id}>.\n` +
       "Je ferme ce salon, à bientôt !"
   );
   removeTicket(claudeChannel.id);
   setTimeout(() => claudeChannel.delete().catch(() => {}), 8000);
 
+  // Log : uniquement l'ouverture (du ticket humain).
   await logEvent(client, {
-    title: "🙋 Ticket escaladé au staff",
+    title: "🎫 Ticket humain ouvert",
     description: `${cfg.emoji} **${cfg.label}** — <@${ticket.ownerId}> → <#${staffChannel.id}>`,
     color: cfg.color,
   });
@@ -502,6 +664,49 @@ async function escalateToStaff(claudeChannel, ticket, client) {
 
 function ownerNameFallback(ticket) {
   return ticket.ownerName || "joueur";
+}
+
+// ── Boutons de la demande (salon demande-de-tickets) ────────────────────────
+
+async function handleRequestAccept(interaction) {
+  if (!isStaff(interaction.member)) {
+    await interaction.reply({ content: "🔒 Réservé au staff.", ephemeral: true });
+    return;
+  }
+  const claudeChannelId = interaction.customId.split(":")[1];
+  const ticket = getTicket(claudeChannelId);
+  const claudeChannel = await interaction.client.channels.fetch(claudeChannelId).catch(() => null);
+  if (!ticket || ticket.stage !== "claude" || !claudeChannel) {
+    await closeRequestMessage(interaction.message, "⚠️ Demande expirée (ticket fermé).");
+    await interaction.reply({ content: "⚠️ Cette demande n'est plus valide.", ephemeral: true });
+    return;
+  }
+  await interaction.deferUpdate();
+  await closeRequestMessage(interaction.message, `✅ Accepté par ${interaction.user.username}`);
+  await openStaffTicket(claudeChannel, ticket, interaction.client);
+}
+
+async function handleRequestRefuse(interaction) {
+  if (!isStaff(interaction.member)) {
+    await interaction.reply({ content: "🔒 Réservé au staff.", ephemeral: true });
+    return;
+  }
+  const claudeChannelId = interaction.customId.split(":")[1];
+  const ticket = getTicket(claudeChannelId);
+  await interaction.deferUpdate();
+  await closeRequestMessage(interaction.message, `❌ Refusé par ${interaction.user.username}`);
+  if (ticket && ticket.stage === "claude") {
+    ticket.requestPending = false;
+    ticket.requestMsgId = undefined;
+    setTicket(claudeChannelId, ticket);
+    const claudeChannel = await interaction.client.channels.fetch(claudeChannelId).catch(() => null);
+    if (claudeChannel) {
+      await claudeChannel.send(
+        "❌ Ta demande d'ouverture de ticket a été refusée par le staff pour l'instant. " +
+          "Tu peux continuer à discuter avec moi."
+      );
+    }
+  }
 }
 
 // ── Boutons du salon Claude ─────────────────────────────────────────────────
@@ -512,8 +717,8 @@ async function handleHumanButton(interaction) {
     await interaction.reply({ content: "Ce ticket n'est plus actif.", ephemeral: true });
     return;
   }
-  await interaction.reply({ content: "🙋 Je transmets ta demande au staff…", ephemeral: true });
-  await escalateToStaff(interaction.channel, ticket, interaction.client);
+  await interaction.reply({ content: "🙋 Je transmets ta demande aux admins…", ephemeral: true });
+  await requestHumanTicket(interaction.channel, ticket, interaction.client, "Le joueur demande un humain.");
 }
 
 async function handleResolvedButton(interaction) {
@@ -527,11 +732,6 @@ async function handleResolvedButton(interaction) {
   });
   removeTicket(interaction.channel.id);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
-  await logEvent(interaction.client, {
-    title: "✅ Ticket fermé (résolu)",
-    description: `**${TICKET_TYPES[ticket.type]?.label || ticket.type}** — fermé par <@${ticket.ownerId}> (sans staff)`,
-    color: 0x2ecc71,
-  });
 }
 
 // ── Boutons du salon staff ──────────────────────────────────────────────────
@@ -564,11 +764,6 @@ async function handleStaffClose(interaction) {
   await interaction.reply({ content: "🔒 Ticket fermé par le staff. Fermeture du salon…" });
   removeTicket(interaction.channel.id);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 4000);
-  await logEvent(interaction.client, {
-    title: "🔒 Ticket staff fermé",
-    description: `**${TICKET_TYPES[ticket.type]?.label || ticket.type}** — ticket de <@${ticket.ownerId}>, fermé par <@${interaction.user.id}>`,
-    color: 0x95a5a6,
-  });
 }
 
 // ── Routage ─────────────────────────────────────────────────────────────────
@@ -580,6 +775,8 @@ async function handleInteraction(interaction) {
     if (id.startsWith("ticket_open:")) { await handleOpenButton(interaction); return true; }
     if (id === "ticket_human") { await handleHumanButton(interaction); return true; }
     if (id === "ticket_close_resolved") { await handleResolvedButton(interaction); return true; }
+    if (id.startsWith("req_accept:")) { await handleRequestAccept(interaction); return true; }
+    if (id.startsWith("req_refuse:")) { await handleRequestRefuse(interaction); return true; }
     if (id === "staff_close_request") { await handleStaffCloseRequest(interaction); return true; }
     if (id === "staff_close") { await handleStaffClose(interaction); return true; }
   } else if (interaction.isModalSubmit()) {
