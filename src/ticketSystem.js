@@ -311,33 +311,31 @@ async function handleModalSubmit(interaction) {
     }
     const info = await fetchBanInfo(code);
     if (!info.available) {
-      // RCON injoignable / commande baninfo absente : impossible de CONFIRMER l'ID.
-      // On n'ouvre pas de ticket sur un ID non vérifié.
-      await interaction.editReply(
-        "❌ Impossible de vérifier l'ID du ban pour le moment. Réessaie dans quelques minutes."
-      );
-      return;
-    }
-    if (!info.found) {
-      // ID inconnu = très probablement une faute de frappe -> on n'ouvre pas.
+      // Serveur injoignable : on NE BLOQUE PAS. Le ticket s'ouvre quand même et
+      // Claude / le staff prennent le relais (on ne peut pas confirmer l'ID ici).
+      extraContext =
+        `INFOS DU BAN : impossible de vérifier l'ID #${code} auprès du serveur pour le moment. ` +
+        "Demande au joueur de confirmer l'ID exact, reste prudent et escalade en cas de doute.";
+    } else if (!info.found) {
+      // Serveur joignable ET aucun ban pour cet ID = faute de frappe -> on n'ouvre pas.
       await interaction.editReply(
         `❌ Désolé, aucun ban ne correspond à l'ID \`#${code}\` — tu t'es sûrement trompé dans l'ID.\n` +
           "Vérifie le code exact affiché sur ton écran de kick (ou dans le monde des bans) et réessaie."
       );
       return;
-    }
-    if (!banContestable(info)) {
+    } else if (!banContestable(info)) {
       await interaction.editReply(
         "⛔ Désolé, ce ban est un **ban pour triche** — il n'est pas contestable. " +
           "Le ticket ne sera pas ouvert."
       );
       return;
+    } else {
+      // Ban confirmé et contestable : on donne le motif officiel à Claude.
+      extraContext =
+        `INFOS DU BAN (ID #${code}) — joueur: ${info.player || "?"}, actif: ${info.active}, ` +
+        `motif officiel: « ${info.reason || "non renseigné"} ». Ce ban est contestable : ` +
+        "confronte la version du joueur à ce motif et exige des preuves solides.";
     }
-    // Ban confirmé et contestable : on ouvre et on donne le motif officiel à Claude.
-    extraContext =
-      `INFOS DU BAN (ID #${code}) — joueur: ${info.player || "?"}, actif: ${info.active}, ` +
-      `motif officiel: « ${info.reason || "non renseigné"} ». Ce ban est contestable : ` +
-      "confronte la version du joueur à ce motif et exige des preuves solides.";
   }
 
   const guild = interaction.guild;
