@@ -227,10 +227,15 @@ function staffButtons() {
       .setCustomId("staff_close_request")
       .setLabel("Demander la fermeture")
       .setEmoji("🙋")
-      .setStyle(ButtonStyle.Secondary),
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function staffConfirmButtons() {
+  return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("staff_close")
-      .setLabel("Fermer le ticket (staff)")
+      .setCustomId("staff_close_confirm")
+      .setLabel("Confirmer la fermeture")
       .setEmoji("🔒")
       .setStyle(ButtonStyle.Danger)
   );
@@ -395,6 +400,11 @@ async function handleModalSubmit(interaction) {
   await channel.send({ content: greeting, components: [claudeButtons()] });
 
   await interaction.editReply(`✅ Ton ticket est ouvert : <#${channel.id}>`);
+  await logEvent(interaction.client, {
+    title: "🎫 Ouverture d'un ticket",
+    description: `${cfg.emoji} **${cfg.label}** — <@${ownerId}> → <#${channel.id}>`,
+    color: cfg.color,
+  });
 }
 
 // ── Conversation avec Claude ────────────────────────────────────────────────
@@ -654,9 +664,8 @@ async function openStaffTicket(claudeChannel, ticket, client) {
   removeTicket(claudeChannel.id);
   setTimeout(() => claudeChannel.delete().catch(() => {}), 8000);
 
-  // Log : uniquement l'ouverture (du ticket humain).
   await logEvent(client, {
-    title: "🎫 Ticket humain ouvert",
+    title: "🙋 Escalade vers le staff",
     description: `${cfg.emoji} **${cfg.label}** — <@${ticket.ownerId}> → <#${staffChannel.id}>`,
     color: cfg.color,
   });
@@ -730,6 +739,14 @@ async function handleResolvedButton(interaction) {
   await interaction.reply({
     content: "✅ Content d'avoir pu t'aider ! Je ferme ce ticket, reviens quand tu veux.",
   });
+  const cfg = TICKET_TYPES[ticket.type];
+  await logEvent(interaction.client, {
+    title: "✅ Fermeture résolue",
+    description:
+      `${cfg.emoji} **${cfg.label}** — <@${ticket.ownerId}> a résolu et fermé son ticket ` +
+      `(sans staff) — <#${interaction.channel.id}>`,
+    color: 0x57f287,
+  });
   removeTicket(interaction.channel.id);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
 }
@@ -742,9 +759,18 @@ async function handleStaffCloseRequest(interaction) {
     await interaction.reply({ content: "Ce ticket n'est plus actif.", ephemeral: true });
     return;
   }
+  if (interaction.user.id !== ticket.ownerId) {
+    await interaction.reply({
+      content: "🔒 Seul le joueur à l'origine du ticket peut demander sa fermeture.",
+      ephemeral: true,
+    });
+    return;
+  }
   const pings = STAFF_IDS.map((id) => `<@&${id}>`).join(" ");
   await interaction.reply({
-    content: `🙋 <@${interaction.user.id}> demande la fermeture de ce ticket. ${pings}`,
+    content: `🙋 <@${interaction.user.id}> demande la fermeture de ce ticket. ${pings}\n` +
+      "Un membre du staff doit **confirmer la fermeture** ci-dessous.",
+    components: [staffConfirmButtons()],
   });
 }
 
@@ -756,12 +782,20 @@ async function handleStaffClose(interaction) {
   }
   if (!isStaff(interaction.member)) {
     await interaction.reply({
-      content: "🔒 Seul un membre du staff peut fermer ce ticket.",
+      content: "🔒 Seul un membre du staff peut confirmer la fermeture de ce ticket.",
       ephemeral: true,
     });
     return;
   }
   await interaction.reply({ content: "🔒 Ticket fermé par le staff. Fermeture du salon…" });
+  const cfg = TICKET_TYPES[ticket.type];
+  await logEvent(interaction.client, {
+    title: "🔒 Fermeture staff",
+    description:
+      `${cfg.emoji} **${cfg.label}** — fermé par ${interaction.user.username} ` +
+      `(<@${interaction.user.id}>), ticket de <@${ticket.ownerId}> — <#${interaction.channel.id}>`,
+    color: 0xed4245,
+  });
   removeTicket(interaction.channel.id);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 4000);
 }
@@ -778,7 +812,7 @@ async function handleInteraction(interaction) {
     if (id.startsWith("req_accept:")) { await handleRequestAccept(interaction); return true; }
     if (id.startsWith("req_refuse:")) { await handleRequestRefuse(interaction); return true; }
     if (id === "staff_close_request") { await handleStaffCloseRequest(interaction); return true; }
-    if (id === "staff_close") { await handleStaffClose(interaction); return true; }
+    if (id === "staff_close_confirm") { await handleStaffClose(interaction); return true; }
   } else if (interaction.isModalSubmit()) {
     if (interaction.customId.startsWith("ticket_modal:")) { await handleModalSubmit(interaction); return true; }
   }
