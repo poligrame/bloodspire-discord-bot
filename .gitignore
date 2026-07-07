@@ -1,5 +1,6 @@
 node_modules/
 .env
+data/
 claims.json
 tickets.json
 message-state.json

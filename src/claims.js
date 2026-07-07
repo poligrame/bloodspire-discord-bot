@@ -1,20 +1,14 @@
-const fs = require("fs");
-const path = require("path");
+const { readJson, writeJson } = require("./storage");
 
-const FILE = path.join(__dirname, "..", "claims.json");
+const FILE = "claims.json";
 
-/** { "<discordUserId>": "<pseudoMinecraft>" } */
+/** { "<discordUserId>": "<pseudoMinecraft>" } — persiste sur le Volume Railway. */
 function load() {
-  if (!fs.existsSync(FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(FILE, "utf8"));
-  } catch {
-    return {};
-  }
+  return readJson(FILE);
 }
 
 function save(claims) {
-  fs.writeFileSync(FILE, JSON.stringify(claims, null, 2), "utf8");
+  writeJson(FILE, claims);
 }
 
 function getClaim(discordUserId) {

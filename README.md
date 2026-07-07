@@ -83,14 +83,26 @@ joueur à cliquer sur **Parler à un humain**.
 Définis `LOG_CHANNEL_ID` sur un salon visible du staff uniquement : le bot y
 journalise chaque **ouverture**, **escalade** et **fermeture** de ticket.
 
-### ⚠️ Railway : système de fichiers éphémère
+### ⚠️ Railway : mémoire persistante (Volume) — OBLIGATOIRE
 
-Sur Railway, les fichiers locaux (`claims.json`, `tickets.json`,
-`message-state.json`) sont **effacés à chaque redéploiement**. Le panneau et le
-message de réclamation sont malgré tout **idempotents** (le bot rescanne le salon
-au démarrage et ne reposte pas de doublon). En revanche, pour conserver les
-réclamations de titre et les tickets en cours entre deux redémarrages, monte un
-**Volume Railway** sur le dossier de l'app.
+Sur Railway, le système de fichiers est **effacé à chaque redéploiement**. Sans
+persistance, à chaque reload le bot **oublie** les réclamations de titre et
+l'état des tickets (les salons de ticket ouverts deviennent "morts", et un
+membre peut re-réclamer un titre).
+
+Le bot écrit toutes ses données (`claims.json`, `tickets.json`,
+`message-state.json`) dans le dossier défini par la variable **`DATA_DIR`**.
+Pour rendre la mémoire persistante :
+
+1. Railway → ton service → onglet **Variables** → ajoute `DATA_DIR` = `/data`.
+2. Railway → ton service → onglet **Settings** (ou **Volumes**) → **+ New Volume**
+   → **Mount path** = `/data`. Valide.
+3. Railway redéploie ; les fichiers survivent désormais aux redémarrages.
+
+En local (sans `DATA_DIR`), les fichiers vont dans `./data` automatiquement.
+
+Le panneau de tickets et le message de réclamation restent en plus **idempotents**
+(le bot rescanne le salon au démarrage et ne poste jamais de doublon).
 
 ### ⚠️ Intent Discord requis
 

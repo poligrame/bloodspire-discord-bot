@@ -1,23 +1,17 @@
-const fs = require("fs");
-const path = require("path");
+const { readJson, writeJson } = require("./storage");
 
-const FILE = path.join(__dirname, "..", "tickets.json");
+const FILE = "tickets.json";
 
 /**
- * Etat persistant des tickets ouverts.
- * { "<channelId>": { type, ownerId, stage: "claude"|"staff", report, createdAt } }
+ * Etat persistant des tickets ouverts (survit aux redemarrages via le Volume).
+ * { "<channelId>": { type, ownerId, stage: "claude"|"staff", report, createdAt, ... } }
  */
 function load() {
-  if (!fs.existsSync(FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(FILE, "utf8"));
-  } catch {
-    return {};
-  }
+  return readJson(FILE);
 }
 
 function save(data) {
-  fs.writeFileSync(FILE, JSON.stringify(data, null, 2), "utf8");
+  writeJson(FILE, data);
 }
 
 function getTicket(channelId) {

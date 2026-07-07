@@ -1,6 +1,4 @@
 require("dotenv").config();
-const fs = require("fs");
-const path = require("path");
 const {
   Client,
   Events,
@@ -16,6 +14,7 @@ const {
 
 const { sendCommand, testConnection } = require("./src/rcon");
 const { getClaim, setClaim, removeClaim } = require("./src/claims");
+const { readJson, writeJson } = require("./src/storage");
 const ticketSystem = require("./src/ticketSystem");
 
 // Garde-fous globaux : une seule promesse rejetee ne doit JAMAIS faire crasher
@@ -29,7 +28,7 @@ process.on("uncaughtException", (err) => {
 });
 
 const TITLE_ID = process.env.TITLE_ID || "discord";
-const STATE_FILE = path.join(__dirname, "message-state.json");
+const STATE_FILE = "message-state.json";
 
 // Pseudo Minecraft valide : 3 a 16 caracteres, lettres/chiffres/underscore.
 const PSEUDO_REGEX = /^[a-zA-Z0-9_]{3,16}$/;
@@ -48,18 +47,12 @@ const client = new Client({
 let tickets;
 
 function loadState() {
-  if (!fs.existsSync(STATE_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return {};
-  }
+  return readJson(STATE_FILE);
 }
 
 /** Fusionne les cles dans message-state.json sans ecraser les autres. */
 function saveState(patch) {
-  const merged = { ...loadState(), ...patch };
-  fs.writeFileSync(STATE_FILE, JSON.stringify(merged, null, 2), "utf8");
+  writeJson(STATE_FILE, { ...loadState(), ...patch });
 }
 
 const CLAIM_TITLE = "🎁 Titre gratuit — Fly au spawn";
@@ -240,9 +233,15 @@ async function handleClaimModalSubmit(interaction) {
     return;
   }
 
-  if (/introuvable|inconnu/i.test(response)) {
+  // Bloque les pseudos ABSENTS de la base du serveur : on n'enregistre le claim
+  // QUE si la commande confirme explicitement l'attribution (marqueur "assigne"/✔).
+  // Une reponse "introuvable" OU toute reponse sans succes clair => refus.
+  const failed = /introuvable|inconnu/i.test(response || "");
+  const succeeded = /assigne|✔/i.test(response || "");
+  if (failed || !succeeded) {
     await interaction.editReply(
-      `❌ Le joueur **${pseudo}** est introuvable — il doit avoir rejoint le serveur au moins une fois.`
+      `❌ Le pseudo **${pseudo}** n'est pas dans la base du serveur — il faut avoir rejoint BloodSpire ` +
+        "au moins une fois, avec ce pseudo exact (attention aux majuscules)."
     );
     return;
   }
